@@ -1,0 +1,13 @@
+# MCP SDK for Anthropic
+mcp>=1.0.0
+
+# Image processing and manipulation
+Pillow>=10.0.0
+
+# HTTP requests for image downloading
+requests>=2.31.0
+
+# DuckDuckGo/multi-backend image search (maintained successor to duckduckgo-search).
+# The old duckduckgo-search hit a single endpoint and got 403 rate-limited constantly;
+# ddgs rotates across multiple backends and handles throttling far better.
+ddgs>=9.0.0

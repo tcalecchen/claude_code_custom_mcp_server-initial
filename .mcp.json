@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "image-tools-server-docker": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "-v",
+        "D:/Workspace/Claude_Code_Project/claude_code_custom_mcp_server-initial/images:/app/images",
+        "-v",
+        "D:/Workspace/Claude_Code_Project/claude_code_custom_mcp_server-initial/input:/app/input",
+        "-v",
+        "D:/Workspace/Claude_Code_Project/claude_code_custom_mcp_server-initial/output:/app/output",
+        "mcp-toy-image-tools-server"
+      ]
+    },
+    "icon-generator": {
+      "type": "sse",
+      "url": "https://icon-generator-mcp-pi.vercel.app/sse"
+    },
+    "markitdown": {
+      "command": "D:/Workspace/Claude_Code_Project/claude_code_custom_mcp_server-initial/.venv-markitdown/Scripts/markitdown-mcp.exe"
+    }
+  }
+}
