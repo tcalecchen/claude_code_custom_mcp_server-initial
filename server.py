@@ -236,6 +236,22 @@ def _estimate_bg_color(img: Image.Image):
     return tuple(sum(px[i] for px in members) // len(members) for i in range(3))
 
 
+def _background_mask(rgb: Image.Image, target, tolerance: int) -> Image.Image:
+    """Mask of pixels within `tolerance` of `target` on every channel.
+
+    Per-channel lookup tables run inside PIL's C layer, so this stays fast even
+    on multi-megapixel images (the old per-pixel Python loop took ~35s on a
+    3815x3815 photo). Never replace this with a getpixel/putpixel loop.
+    """
+    channel_masks = [
+        channel.point(lambda v, t=t: 255 if abs(v - t) <= tolerance else 0)
+        for channel, t in zip(rgb.split(), target)
+    ]
+    return ImageChops.multiply(
+        ImageChops.multiply(channel_masks[0], channel_masks[1]), channel_masks[2]
+    )
+
+
 def _border_connected(mask: Image.Image, max_side: int = 400) -> Image.Image:
     """Keep only the parts of `mask` that connect to the image border.
 
@@ -327,16 +343,7 @@ async def remove_background_as_png(
         else:
             target = _estimate_bg_color(rgb)
 
-        # Per-channel lookup tables run inside PIL's C layer, so this stays fast
-        # even on multi-megapixel images (the old per-pixel Python loop took
-        # ~35s on a 3815x3815 photo).
-        channel_masks = [
-            channel.point(lambda v, t=t: 255 if abs(v - t) <= tolerance else 0)
-            for channel, t in zip(rgb.split(), target)
-        ]
-        bg_mask = ImageChops.multiply(
-            ImageChops.multiply(channel_masks[0], channel_masks[1]), channel_masks[2]
-        )
+        bg_mask = _background_mask(rgb, target, tolerance)
 
         if keep_enclosed:
             bg_mask = _border_connected(bg_mask)
