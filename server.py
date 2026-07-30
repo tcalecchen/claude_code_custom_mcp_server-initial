@@ -450,5 +450,91 @@ async def remove_background_as_png(
         return f"Error removing background: {str(e)}"
 
 
+@mcp.tool()
+async def crop_to_square(
+    image_path: str,
+    output_path: Optional[str] = None,
+    margin: float = 0.05,
+    tolerance: int = 30,
+    bg_color: Optional[str] = None,
+) -> str:
+    """Crop an image to a square centred on its subject.
+
+    The subject is located from the alpha channel when the image carries real
+    transparency, and from background-colour detection otherwise. The result is
+    always a pure crop: the square is clamped inside the image and its side is
+    capped at the short edge, so no pixels are ever padded in.
+
+    Args:
+        image_path: Image to crop.
+        output_path: Destination PNG. Defaults to "<name>_square.png".
+        margin: Breathing room around the subject, as a fraction of its longest
+            side (0.05 = 5%).
+        tolerance: Per-channel distance from the background colour that still
+            counts as background (0-255). Opaque images only.
+        bg_color: Background colour as "#rrggbb" or "r,g,b". Auto-detected from
+            the image border when omitted. Opaque images only.
+    """
+
+    if not os.path.exists(image_path):
+        return f"Error: Image file not found: {image_path}"
+
+    if not 0 <= tolerance <= 255:
+        return f"Error: tolerance must be between 0 and 255, got {tolerance}"
+
+    if margin < 0:
+        return f"Error: margin must not be negative, got {margin}"
+
+    started = time.time()
+
+    try:
+        with Image.open(image_path) as opened:
+            img = opened.convert("RGBA")
+
+        try:
+            bbox, method = _subject_bbox(img, tolerance, bg_color)
+        except ValueError as e:
+            return f"Error: {e}"
+
+        if bbox is None:
+            return (
+                "Error: no subject found - the whole image reads as background. "
+                "Try a lower tolerance or pass bg_color explicitly."
+            )
+
+        box, side, capped, shifted = _square_box(bbox, img.size, margin)
+        cropped = img.crop(box)
+
+        if not output_path:
+            name, _ = os.path.splitext(image_path)
+            output_path = f"{name}_square.png"
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        cropped.save(output_path, "PNG")
+
+        result = "Cropped to square successfully!\n"
+        result += f"Subject detected from: {method}\n"
+        result += f"Original size: {img.width}x{img.height}\n"
+        result += f"Subject bbox: {bbox[0]},{bbox[1]} to {bbox[2]},{bbox[3]}\n"
+        result += f"Output: {side}x{side} at offset {box[0]},{box[1]}\n"
+        if capped:
+            result += (
+                f"Note: side length capped at the image's short edge "
+                f"({min(img.size)}px) - the subject is too large for a square "
+                "of real pixels to enclose it.\n"
+            )
+        if shifted:
+            result += (
+                "Note: crop window shifted inward to stay inside the image, so "
+                "the subject is not exactly centred.\n"
+            )
+        result += f"Elapsed: {time.time() - started:.2f}s\n"
+        result += f"Saved to: {output_path}"
+        return result
+
+    except Exception as e:
+        return f"Error cropping image: {str(e)}"
+
+
 if __name__ == "__main__":
     mcp.run()
