@@ -1,0 +1,3 @@
+# Dev-only dependencies. NOT installed into the Docker image - the Dockerfile
+# only ever reads requirements.txt, which stays minimal on purpose.
+pytest>=8.0
