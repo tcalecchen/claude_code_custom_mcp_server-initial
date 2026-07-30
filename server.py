@@ -300,6 +300,34 @@ def _border_connected(mask: Image.Image, max_side: int = 400) -> Image.Image:
     return ImageChops.multiply(mask, grown)
 
 
+def _square_box(bbox, image_size, margin: float):
+    """Square crop box centred on `bbox`, clamped to stay inside the image.
+
+    Returns (box, side, capped, shifted):
+      box     - (left, top, right, bottom) for Image.crop
+      side    - the square's edge length
+      capped  - side was limited by the image's short edge
+      shifted - the window slid away from the subject centre to stay in bounds
+
+    The result is always a pure crop of real pixels: nothing is ever padded in.
+    """
+    left0, top0, right0, bottom0 = bbox
+    width, height = image_size
+
+    side = round(max(right0 - left0, bottom0 - top0) * (1 + margin))
+    limit = min(width, height)
+    capped = side > limit
+    side = max(1, min(side, limit))
+
+    wanted_left = round((left0 + right0) / 2 - side / 2)
+    wanted_top = round((top0 + bottom0) / 2 - side / 2)
+    left = min(max(wanted_left, 0), width - side)
+    top = min(max(wanted_top, 0), height - side)
+    shifted = (left, top) != (wanted_left, wanted_top)
+
+    return (left, top, left + side, top + side), side, capped, shifted
+
+
 @mcp.tool()
 async def remove_background_as_png(
     image_path: str,
