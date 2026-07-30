@@ -2,6 +2,7 @@
 
 import asyncio
 
+import pytest
 from PIL import Image, ImageChops, ImageDraw
 
 import server
@@ -116,3 +117,58 @@ def test_square_box_output_is_always_square_and_inside_the_image():
         assert bottom - top == side
         assert 0 <= left and 0 <= top
         assert right <= 100 and bottom <= 60
+
+
+def _transparent_bg_with_square(size=(20, 20)):
+    """RGBA image whose only opaque region is bbox (5, 5, 15, 15).
+
+    Pixel (2, 2) gets alpha 4 - the kind of near-transparent fringe the
+    Gaussian feather in remove_background_as_png leaves behind. It sits below
+    ALPHA_THRESHOLD and must not widen the bbox.
+    """
+    img = Image.new("RGBA", size, (255, 255, 255, 0))
+    alpha = Image.new("L", size, 0)
+    ImageDraw.Draw(alpha).rectangle((5, 5, 14, 14), fill=255)
+    alpha.putpixel((2, 2), 4)
+    img.putalpha(alpha)
+    return img
+
+
+def test_subject_bbox_uses_alpha_when_image_has_transparency():
+    bbox, method = server._subject_bbox(_transparent_bg_with_square(), 30, None)
+
+    assert bbox == (5, 5, 15, 15)      # (2, 2) fringe excluded by ALPHA_THRESHOLD
+    assert "alpha" in method
+
+
+def test_subject_bbox_falls_back_to_auto_detected_background():
+    img = _white_bg_with_square().convert("RGBA")
+
+    bbox, method = server._subject_bbox(img, 10, None)
+
+    assert bbox == (5, 5, 15, 15)
+    assert "auto-detected" in method
+
+
+def test_subject_bbox_honours_explicit_bg_color():
+    img = _white_bg_with_square().convert("RGBA")
+
+    bbox, method = server._subject_bbox(img, 10, "#ffffff")
+
+    assert bbox == (5, 5, 15, 15)
+    assert "specified" in method
+
+
+def test_subject_bbox_returns_none_when_everything_is_background():
+    img = Image.new("RGBA", (20, 20), (255, 255, 255, 255))
+
+    bbox, _ = server._subject_bbox(img, 10, None)
+
+    assert bbox is None
+
+
+def test_subject_bbox_rejects_a_malformed_bg_color():
+    img = _white_bg_with_square().convert("RGBA")
+
+    with pytest.raises(ValueError):
+        server._subject_bbox(img, 10, "not-a-colour")

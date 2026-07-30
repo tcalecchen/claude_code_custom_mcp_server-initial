@@ -26,6 +26,12 @@ logger = logging.getLogger("image-tools-server")
 # Create server instance
 mcp = FastMCP("image-tools-server")
 
+# Alpha values at or below this count as fully transparent when locating a
+# subject. Its job is to discard the near-transparent fringe left by the
+# Gaussian feather in remove_background_as_png. Deliberately not a tool
+# parameter - there is no use case for tuning it from outside.
+ALPHA_THRESHOLD = 8
+
 
 def _search_images(search_term: str, max_results: int):
     """Search for images across multiple backends with retry + exponential backoff.
@@ -326,6 +332,36 @@ def _square_box(bbox, image_size, margin: float):
     shifted = (left, top) != (wanted_left, wanted_top)
 
     return (left, top, left + side, top + side), side, capped, shifted
+
+
+def _subject_bbox(img: Image.Image, tolerance: int, bg_color: Optional[str]):
+    """Locate the subject in an RGBA image.
+
+    Returns (bbox, method). `bbox` is (left, top, right, bottom), or None when
+    the whole image reads as background. `method` describes how the subject was
+    found, for the tool's report.
+
+    Uses the alpha channel when the image carries real transparency, otherwise
+    falls back to background-colour detection. The fallback deliberately skips
+    _border_connected: background-coloured regions enclosed by the subject are
+    inside its outer extent by definition, so they cannot move the bounding box
+    and the flood fill would cost time for nothing.
+    """
+    alpha = img.getchannel("A")
+    if alpha.getextrema()[0] < 255:
+        subject = alpha.point(lambda v: 255 if v > ALPHA_THRESHOLD else 0)
+        return subject.getbbox(), "alpha channel"
+
+    rgb = img.convert("RGB")
+    if bg_color:
+        target = _parse_color(bg_color)
+        method = f"background colour rgb{target} (specified)"
+    else:
+        target = _estimate_bg_color(rgb)
+        method = f"background colour rgb{target} (auto-detected)"
+
+    subject = ImageChops.invert(_background_mask(rgb, target, tolerance))
+    return subject.getbbox(), method
 
 
 @mcp.tool()
