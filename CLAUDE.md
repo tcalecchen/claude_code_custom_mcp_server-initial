@@ -18,6 +18,8 @@ This is an MCP (Model Context Protocol) Image Tools Server that provides image p
 - `fetch_toy_image` - Downloads toy-related images via DuckDuckGo image search
 - `resize_image` - Resizes images to specified dimensions, with optional aspect ratio preservation
 - `remove_background_as_png` - Removes a solid-colour background and saves an RGBA PNG
+- `crop_to_square` - Crops an image to a square centred on its subject (alpha
+  bbox, falling back to background-colour detection)
 
 **Directory Structure:**
 - `./images/` - Working directory for downloaded and processed images
@@ -73,6 +75,15 @@ After making changes to the server code:
   subject stay opaque.
 - DuckDuckGo search integration for image fetching (`duckduckgo-search`)
 - `fetch_toy_image` outputs default to the `./images/` directory
+- Background-colour masking lives in one place: `_background_mask` builds the
+  per-channel LUT mask shared by `remove_background_as_png` and
+  `crop_to_square`'s opaque fallback path.
+- `crop_to_square` never pads. The square's side is capped at the image's short
+  edge and the window is clamped inside the frame, so the output is always real
+  pixels — the report says so explicitly when either limit kicks in.
+- `crop_to_square`'s fallback path skips `_border_connected` on purpose:
+  enclosed background regions sit inside the subject's outer extent, so they
+  cannot move the bounding box.
 
 **Container Architecture**: Runs as non-root user `mcp-user` with volume mounts for file I/O. The container includes OpenGL and imaging libraries for processing support.
 
@@ -100,12 +111,15 @@ To add new image processing tools:
 ## Dependencies Management
 
 Core dependencies in `requirements.txt`:
-- `mcp>=1.0.0` - MCP SDK
+- `mcp>=1.0.0,<2.0.0` - MCP SDK (capped: mcp 2.x removed `mcp.server.fastmcp`)
 - `Pillow>=10.0.0` - Image processing
 - `requests>=2.31.0` - HTTP client
 - `duckduckgo-search>=6.1.0` - Image search
 
 Keep `requirements.txt` minimal — only add a dependency once code actually imports it. (Previously `numpy`, `torch`, and `torchvision` were listed but unused; they pulled in the full CUDA stack and bloated the image to multiple GB before being removed.)
+
+Test-only dependencies live in `requirements-dev.txt` (currently just `pytest`).
+The Dockerfile never reads that file, so the test tooling stays out of the image.
 
 System dependencies (imaging/OpenGL libraries) are handled in the Dockerfile for containerized deployment.
 
@@ -156,11 +170,13 @@ Also available: `verification-before-completion`, `dispatching-parallel-agents`,
 Two skills assume conventions this repo does not have. Adapt rather than follow
 them literally:
 
-**`test-driven-development` — there is no test suite.** No `tests/`, no pytest,
-no test dependency in `requirements.txt`. A literal RED-GREEN cycle has nothing
-to run, and the skill deletes code written before its test. Either stand up a
-real test harness first (add `pytest` to `requirements.txt`) or substitute the
-verification path already documented above:
+**`test-driven-development` — there is a partial test suite.** `tests/` covers
+the image helpers and `crop_to_square` via pytest (`pip install -r
+requirements.txt -r requirements-dev.txt`, then `pytest tests/ -v`). `pytest`
+is deliberately kept out of `requirements.txt` so it never enters the Docker
+image. There is no
+coverage for `fetch_toy_image` (it hits the network) or for the MCP transport
+layer, so for changes in those areas substitute the container verification path:
 
 1. `docker build -t mcp-toy-image-tools-server .`
 2. The MCP `initialize` handshake smoke test under *MCP Server Management*

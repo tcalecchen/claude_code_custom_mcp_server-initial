@@ -1,3 +1,5 @@
 venv/
 .venv-markitdown/
 images/
+__pycache__/
+.pytest_cache/

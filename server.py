@@ -26,6 +26,12 @@ logger = logging.getLogger("image-tools-server")
 # Create server instance
 mcp = FastMCP("image-tools-server")
 
+# Alpha values at or below this count as fully transparent when locating a
+# subject. Its job is to discard the near-transparent fringe left by the
+# Gaussian feather in remove_background_as_png. Deliberately not a tool
+# parameter - there is no use case for tuning it from outside.
+ALPHA_THRESHOLD = 8
+
 
 def _search_images(search_term: str, max_results: int):
     """Search for images across multiple backends with retry + exponential backoff.
@@ -236,6 +242,22 @@ def _estimate_bg_color(img: Image.Image):
     return tuple(sum(px[i] for px in members) // len(members) for i in range(3))
 
 
+def _background_mask(rgb: Image.Image, target, tolerance: int) -> Image.Image:
+    """Mask of pixels within `tolerance` of `target` on every channel.
+
+    Per-channel lookup tables run inside PIL's C layer, so this stays fast even
+    on multi-megapixel images (the old per-pixel Python loop took ~35s on a
+    3815x3815 photo). Never replace this with a getpixel/putpixel loop.
+    """
+    channel_masks = [
+        channel.point(lambda v, t=t: 255 if abs(v - t) <= tolerance else 0)
+        for channel, t in zip(rgb.split(), target)
+    ]
+    return ImageChops.multiply(
+        ImageChops.multiply(channel_masks[0], channel_masks[1]), channel_masks[2]
+    )
+
+
 def _border_connected(mask: Image.Image, max_side: int = 400) -> Image.Image:
     """Keep only the parts of `mask` that connect to the image border.
 
@@ -284,6 +306,64 @@ def _border_connected(mask: Image.Image, max_side: int = 400) -> Image.Image:
     return ImageChops.multiply(mask, grown)
 
 
+def _square_box(bbox, image_size, margin: float):
+    """Square crop box centred on `bbox`, clamped to stay inside the image.
+
+    Returns (box, side, capped, shifted):
+      box     - (left, top, right, bottom) for Image.crop
+      side    - the square's edge length
+      capped  - side was limited by the image's short edge
+      shifted - the window slid away from the subject centre to stay in bounds
+
+    The result is always a pure crop of real pixels: nothing is ever padded in.
+    """
+    left0, top0, right0, bottom0 = bbox
+    width, height = image_size
+
+    side = round(max(right0 - left0, bottom0 - top0) * (1 + margin))
+    limit = min(width, height)
+    capped = side > limit
+    side = max(1, min(side, limit))
+
+    wanted_left = round((left0 + right0) / 2 - side / 2)
+    wanted_top = round((top0 + bottom0) / 2 - side / 2)
+    left = min(max(wanted_left, 0), width - side)
+    top = min(max(wanted_top, 0), height - side)
+    shifted = (left, top) != (wanted_left, wanted_top)
+
+    return (left, top, left + side, top + side), side, capped, shifted
+
+
+def _subject_bbox(img: Image.Image, tolerance: int, bg_color: Optional[str]):
+    """Locate the subject in an RGBA image.
+
+    Returns (bbox, method). `bbox` is (left, top, right, bottom), or None when
+    the whole image reads as background. `method` describes how the subject was
+    found, for the tool's report.
+
+    Uses the alpha channel when the image carries real transparency, otherwise
+    falls back to background-colour detection. The fallback deliberately skips
+    _border_connected: background-coloured regions enclosed by the subject are
+    inside its outer extent by definition, so they cannot move the bounding box
+    and the flood fill would cost time for nothing.
+    """
+    alpha = img.getchannel("A")
+    if alpha.getextrema()[0] < 255:
+        subject = alpha.point(lambda v: 255 if v > ALPHA_THRESHOLD else 0)
+        return subject.getbbox(), "alpha channel"
+
+    rgb = img.convert("RGB")
+    if bg_color:
+        target = _parse_color(bg_color)
+        method = f"background colour rgb{target} (specified)"
+    else:
+        target = _estimate_bg_color(rgb)
+        method = f"background colour rgb{target} (auto-detected)"
+
+    subject = ImageChops.invert(_background_mask(rgb, target, tolerance))
+    return subject.getbbox(), method
+
+
 @mcp.tool()
 async def remove_background_as_png(
     image_path: str,
@@ -327,16 +407,7 @@ async def remove_background_as_png(
         else:
             target = _estimate_bg_color(rgb)
 
-        # Per-channel lookup tables run inside PIL's C layer, so this stays fast
-        # even on multi-megapixel images (the old per-pixel Python loop took
-        # ~35s on a 3815x3815 photo).
-        channel_masks = [
-            channel.point(lambda v, t=t: 255 if abs(v - t) <= tolerance else 0)
-            for channel, t in zip(rgb.split(), target)
-        ]
-        bg_mask = ImageChops.multiply(
-            ImageChops.multiply(channel_masks[0], channel_masks[1]), channel_masks[2]
-        )
+        bg_mask = _background_mask(rgb, target, tolerance)
 
         if keep_enclosed:
             bg_mask = _border_connected(bg_mask)
@@ -377,6 +448,92 @@ async def remove_background_as_png(
 
     except Exception as e:
         return f"Error removing background: {str(e)}"
+
+
+@mcp.tool()
+async def crop_to_square(
+    image_path: str,
+    output_path: Optional[str] = None,
+    margin: float = 0.05,
+    tolerance: int = 30,
+    bg_color: Optional[str] = None,
+) -> str:
+    """Crop an image to a square centred on its subject.
+
+    The subject is located from the alpha channel when the image carries real
+    transparency, and from background-colour detection otherwise. The result is
+    always a pure crop: the square is clamped inside the image and its side is
+    capped at the short edge, so no pixels are ever padded in.
+
+    Args:
+        image_path: Image to crop.
+        output_path: Destination PNG. Defaults to "<name>_square.png".
+        margin: Breathing room around the subject, as a fraction of its longest
+            side (0.05 = 5%).
+        tolerance: Per-channel distance from the background colour that still
+            counts as background (0-255). Opaque images only.
+        bg_color: Background colour as "#rrggbb" or "r,g,b". Auto-detected from
+            the image border when omitted. Opaque images only.
+    """
+
+    if not os.path.exists(image_path):
+        return f"Error: Image file not found: {image_path}"
+
+    if not 0 <= tolerance <= 255:
+        return f"Error: tolerance must be between 0 and 255, got {tolerance}"
+
+    if margin < 0:
+        return f"Error: margin must not be negative, got {margin}"
+
+    started = time.time()
+
+    try:
+        with Image.open(image_path) as opened:
+            img = opened.convert("RGBA")
+
+        try:
+            bbox, method = _subject_bbox(img, tolerance, bg_color)
+        except ValueError as e:
+            return f"Error: {e}"
+
+        if bbox is None:
+            return (
+                "Error: no subject found - the whole image reads as background. "
+                "Try a lower tolerance or pass bg_color explicitly."
+            )
+
+        box, side, capped, shifted = _square_box(bbox, img.size, margin)
+        cropped = img.crop(box)
+
+        if not output_path:
+            name, _ = os.path.splitext(image_path)
+            output_path = f"{name}_square.png"
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        cropped.save(output_path, "PNG")
+
+        result = "Cropped to square successfully!\n"
+        result += f"Subject detected from: {method}\n"
+        result += f"Original size: {img.width}x{img.height}\n"
+        result += f"Subject bbox: {bbox[0]},{bbox[1]} to {bbox[2]},{bbox[3]}\n"
+        result += f"Output: {side}x{side} at offset {box[0]},{box[1]}\n"
+        if capped:
+            result += (
+                f"Note: side length capped at the image's short edge "
+                f"({min(img.size)}px) - the subject is too large for a square "
+                "of real pixels to enclose it.\n"
+            )
+        if shifted:
+            result += (
+                "Note: crop window shifted inward to stay inside the image, so "
+                "the subject is not exactly centred.\n"
+            )
+        result += f"Elapsed: {time.time() - started:.2f}s\n"
+        result += f"Saved to: {output_path}"
+        return result
+
+    except Exception as e:
+        return f"Error cropping image: {str(e)}"
 
 
 if __name__ == "__main__":
