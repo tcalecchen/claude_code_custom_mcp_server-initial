@@ -111,12 +111,15 @@ To add new image processing tools:
 ## Dependencies Management
 
 Core dependencies in `requirements.txt`:
-- `mcp>=1.0.0` - MCP SDK
+- `mcp>=1.0.0,<2.0.0` - MCP SDK (capped: mcp 2.x removed `mcp.server.fastmcp`)
 - `Pillow>=10.0.0` - Image processing
 - `requests>=2.31.0` - HTTP client
 - `duckduckgo-search>=6.1.0` - Image search
 
 Keep `requirements.txt` minimal — only add a dependency once code actually imports it. (Previously `numpy`, `torch`, and `torchvision` were listed but unused; they pulled in the full CUDA stack and bloated the image to multiple GB before being removed.)
+
+Test-only dependencies live in `requirements-dev.txt` (currently just `pytest`).
+The Dockerfile never reads that file, so the test tooling stays out of the image.
 
 System dependencies (imaging/OpenGL libraries) are handled in the Dockerfile for containerized deployment.
 
@@ -169,8 +172,9 @@ them literally:
 
 **`test-driven-development` — there is a partial test suite.** `tests/` covers
 the image helpers and `crop_to_square` via pytest (`pip install -r
-requirements-dev.txt`, then `pytest tests/ -v`). `pytest` is deliberately kept
-out of `requirements.txt` so it never enters the Docker image. There is no
+requirements.txt -r requirements-dev.txt`, then `pytest tests/ -v`). `pytest`
+is deliberately kept out of `requirements.txt` so it never enters the Docker
+image. There is no
 coverage for `fetch_toy_image` (it hits the network) or for the MCP transport
 layer, so for changes in those areas substitute the container verification path:
 
