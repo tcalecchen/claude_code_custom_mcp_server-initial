@@ -1,5 +1,7 @@
-# MCP SDK for Anthropic
-mcp>=1.0.0
+# MCP SDK for Anthropic.
+# Pinned below 2.0: mcp 2.x removed mcp.server.fastmcp,
+# which server.py imports. Migrating is a separate job.
+mcp>=1.0.0,<2.0.0
 
 # Image processing and manipulation
 Pillow>=10.0.0
