@@ -44,6 +44,29 @@ docker run --rm -i \
   mcp-toy-image-tools-server
 ```
 
+**Git Bash rewrites container-internal paths.** On Windows, MSYS converts any
+argument that looks like a Unix absolute path into a Windows path before
+`docker` ever sees it. Volume mounts survive, because the `host:container` form
+is left alone — but a bare in-container path passed as a command argument does
+not:
+
+```bash
+# Broken: the container reports
+#   can't open file '/app/D:/Program Files/Git/app/out/sheet.py'
+docker run --rm --entrypoint python \
+  -v /c/tmp/scratch:/app/out \
+  mcp-toy-image-tools-server /app/out/sheet.py
+
+# Works
+MSYS_NO_PATHCONV=1 docker run --rm --entrypoint python \
+  -v /c/tmp/scratch:/app/out \
+  mcp-toy-image-tools-server /app/out/sheet.py
+```
+
+This never affects `.mcp.json` — Claude Code spawns `docker` directly, with no
+shell in between. It only bites ad-hoc commands run from Git Bash, most often
+when `--entrypoint` is used to run a helper script inside the container.
+
 ### MCP Server Management
 ```bash
 # Smoke-test the containerized server with a real MCP initialize handshake
