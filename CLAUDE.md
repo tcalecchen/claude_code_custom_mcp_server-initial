@@ -99,6 +99,40 @@ Volume mounts use **absolute host paths** (not `${PWD}`, which does not expand o
 
 If the project directory moves, update the absolute paths in `.mcp.json` accordingly.
 
+### markitdown server 需要在本機自建 venv
+
+`.mcp.json` 除了 Docker 化的 image-tools server 之外，還註冊了第二個 server
+`markitdown`。它**不在 container 裡**，而是直接執行 `.venv-markitdown/` 這個
+venv 裡的 `markitdown-mcp.exe`。該目錄被 `.gitignore` 排除，但**指向它的絕對
+路徑是有 commit 進 repo 的**，所以每一次全新 clone —— 或同一個 repo 換到另一
+台機器 —— 一開始 `markitdown` 都是壞的，必須在本機用同樣的路徑重建 venv：
+
+```bash
+# <base-python> 是這台機器的 interpreter，例如 D:\anaconda3\python.exe
+<base-python> -m venv .venv-markitdown
+./.venv-markitdown/Scripts/python.exe -m pip install markitdown-mcp
+```
+
+不要假設裝完就會通，跑一次真正的 handshake 驗證 —— `Scripts/` 底下全是 shim，
+只有在執行的那一刻才會失敗：
+
+```bash
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' \
+  | ./.venv-markitdown/Scripts/markitdown-mcp.exe
+# 預期看到 "serverInfo":{"name":"markitdown",...}；stderr 的 warning 無害
+```
+
+venv 會把 base interpreter 的絕對路徑記在 `pyvenv.cfg` 裡。一旦那個 interpreter
+消失，`Scripts/` 下的每個執行檔都會噴 `No Python at '<舊路徑>'`，而且這個 venv
+**修不回來，只能重建**。這件事已經發生過一次：venv 原本是在另一台機器上以
+`E:\Python311` 建立的，那個路徑在這台機器不存在，因此改用 `D:\anaconda3`
+（Python 3.13.9）重建 —— 那也是這台機器上唯一的 Python，既沒有 `py` launcher，
+也沒有 python.org 的安裝。
+
+這個 server 只提供一個 tool `convert_to_markdown`，參數是 `http:`、`https:`、
+`file:` 或 `data:` URI。文件類格式開箱可用；音訊轉錄另外需要 PATH 上有
+`ffmpeg`。
+
 ## Adding New Tools
 
 To add new image processing tools:
