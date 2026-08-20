@@ -12,10 +12,10 @@ This is an MCP (Model Context Protocol) Image Tools Server that provides image p
 - `server.py` - Main MCP server implementation using FastMCP framework
 - `Dockerfile` - Container configuration with Python 3.11 and image processing dependencies
 - `.mcp.json` - MCP server configuration for Claude Code integration
-- Requirements managed via `requirements.txt` with dependencies for Pillow (PIL), requests, and duckduckgo-search
+- Requirements managed via `requirements.txt` with dependencies for Pillow (PIL), requests, and ddgs (multi-backend image search)
 
 **MCP Tools Available:**
-- `fetch_toy_image` - Downloads toy-related images via DuckDuckGo image search
+- `fetch_toy_image` - Downloads toy-related images via multi-backend image search (`ddgs`)
 - `resize_image` - Resizes images to specified dimensions, with optional aspect ratio preservation
 - `remove_background_as_png` - Removes a solid-colour background and saves an RGBA PNG
 - `crop_to_square` - Crops an image to a square centred on its subject (alpha
@@ -73,7 +73,11 @@ After making changes to the server code:
   Python-level loop is the border flood fill in `_border_connected`, which runs
   on a ≤400px copy of the mask so background-coloured regions enclosed by the
   subject stay opaque.
-- DuckDuckGo search integration for image fetching (`duckduckgo-search`)
+- Image search goes through `ddgs`, which rotates across several backends
+  (`duckduckgo`, `bing`, `brave`, `google`, `yahoo`, `auto`). `_search_images`
+  walks that list inside a 4-attempt retry loop with exponential backoff, so one
+  throttled backend does not fail the whole request. The import is lazy and falls
+  back to the old `duckduckgo_search` module name if `ddgs` is absent.
 - `fetch_toy_image` outputs default to the `./images/` directory
 - Background-colour masking lives in one place: `_background_mask` builds the
   per-channel LUT mask shared by `remove_background_as_png` and
@@ -148,7 +152,8 @@ Core dependencies in `requirements.txt`:
 - `mcp>=1.0.0,<2.0.0` - MCP SDK (capped: mcp 2.x removed `mcp.server.fastmcp`)
 - `Pillow>=10.0.0` - Image processing
 - `requests>=2.31.0` - HTTP client
-- `duckduckgo-search>=6.1.0` - Image search
+- `ddgs>=9.0.0` - Multi-backend image search. Replaces `duckduckgo-search`,
+  which hit a single endpoint and got 403 rate-limited constantly.
 
 Keep `requirements.txt` minimal — only add a dependency once code actually imports it. (Previously `numpy`, `torch`, and `torchvision` were listed but unused; they pulled in the full CUDA stack and bloated the image to multiple GB before being removed.)
 
